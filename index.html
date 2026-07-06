@@ -84,6 +84,19 @@
   .catman{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;}
   .catpill{display:inline-flex; align-items:center; gap:6px; padding:6px 8px 6px 12px; border:1px solid var(--border); border-radius:999px; font-size:14px;}
   .catpill button{background:none; border:none; color:var(--light); font-size:15px; line-height:1; padding:0 2px;}
+  /* 並び替え（ドラッグ） */
+  .dragrow{display:flex; align-items:center; gap:8px; padding:9px 4px; border-bottom:1px solid var(--border); background:var(--card); touch-action:pan-y;}
+  .dragrow:last-of-type{border-bottom:none;}
+  .dragrow.dragging{opacity:.4;}
+  .dragrow.dragover{border-top:2px solid var(--primary);}
+  .draghandle{flex:none; width:30px; height:34px; display:flex; align-items:center; justify-content:center; color:var(--light); cursor:grab; touch-action:none; border-radius:8px;}
+  .draghandle:active{cursor:grabbing; background:var(--primary-l);}
+  .draghandle svg{width:18px; height:18px;}
+  .dragmain{flex:1; min-width:0; display:flex; align-items:center; gap:8px; overflow:hidden;}
+  .dragmain .nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .dragrow .acts{flex:none; display:flex; gap:2px;}
+  .dragghost{position:fixed; left:0; top:0; z-index:200; pointer-events:none; background:var(--card); border:1px solid var(--primary); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.18); padding:9px 12px; opacity:.96; display:flex; align-items:center; gap:8px; font-size:14px;}
+  .catman.drag{flex-direction:column; align-items:stretch; gap:0;}
   .ocrbox{border:1px dashed var(--primary); border-radius:12px; padding:12px; text-align:center; background:var(--primary-l);}
   .ocrbox input{display:none;} .ocrlabel{color:var(--primary); font-weight:700;}
   nav{position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid var(--border); display:flex; max-width:520px; margin:0 auto;
@@ -482,21 +495,22 @@ function viewSettings(){ const y=new Date().getFullYear(); let h='<h2>設定・�
   h+='<div class="datehead">医療費控除の出力（'+esc(curLedger().name)+'）</div><div class="card"><label>対象年</label><select id="s_year">'+[y,y-1,y-2].map(v=>'<option value="'+v+'">'+v+'年</option>').join("")+'</select><button class="btn mt" onclick="exportMedicalCsv(document.getElementById(\'s_year\').value)">CSVで出力（ダウンロード）</button></div>';
   const tabDefs=[["invest","投資"],["goals","目標"],["graph","グラフ"]];
   h+='<div class="datehead">表示するタブ（下のメニュー）</div><div class="card">'+tabDefs.map(t=>'<div class="toggle-row"><span>'+t[1]+'</span><label class="switch"><input type="checkbox" '+(data.prefs.tabs[t[0]]?"checked":"")+' onchange="toggleTab(\''+t[0]+'\')"><span class="track"></span></label></div>').join("")+'<div class="muted mt">使わないタブを隠せます（例：投資をしない方）。<b>非表示にしても入力したデータは消えず残ります</b>。もう一度オンにすれば元どおり表示されます。</div></div>';
-  h+='<div class="datehead">カテゴリの管理</div><div class="card"><div class="sub" style="font-weight:700;margin-bottom:6px">支出のカテゴリ</div><div class="catman">'+data.categories.expense.map((c,i)=>'<span class="catpill">'+esc(c)+'<button onclick="deleteCategory(\'expense\','+i+')">✕</button></span>').join("")+'</div><div class="row" style="gap:8px"><input id="c_exp" placeholder="新しい支出カテゴリ"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addCategory(\'expense\')">追加</button></div><div class="sub" style="font-weight:700;margin:14px 0 6px">収入のカテゴリ</div><div class="catman">'+data.categories.income.map((c,i)=>'<span class="catpill">'+esc(c)+'<button onclick="deleteCategory(\'income\','+i+')">✕</button></span>').join("")+'</div><div class="row" style="gap:8px"><input id="c_inc" placeholder="新しい収入カテゴリ"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addCategory(\'income\')">追加</button></div></div>';
+  const catRow=(kind,c,i)=>'<div class="dragrow" data-idx="'+i+'">'+dragHandleSVG()+'<div class="dragmain"><span class="nm">'+esc(c)+'</span></div><div class="acts"><button class="del" onclick="deleteCategory(\''+kind+'\','+i+')">✕</button></div></div>';
+  h+='<div class="datehead">カテゴリの管理</div><div class="card"><div class="sub" style="font-weight:700;margin-bottom:6px">支出のカテゴリ</div><div class="catman drag" data-reorder="cat:expense">'+data.categories.expense.map((c,i)=>catRow("expense",c,i)).join("")+'</div><div class="row" style="gap:8px;margin-top:8px"><input id="c_exp" placeholder="新しい支出カテゴリ"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addCategory(\'expense\')">追加</button></div><div class="sub" style="font-weight:700;margin:14px 0 6px">収入のカテゴリ</div><div class="catman drag" data-reorder="cat:income">'+data.categories.income.map((c,i)=>catRow("income",c,i)).join("")+'</div><div class="row" style="gap:8px;margin-top:8px"><input id="c_inc" placeholder="新しい収入カテゴリ"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addCategory(\'income\')">追加</button></div><div class="muted mt">≡をつまんで上下にドラッグすると順番を変えられます。</div></div>';
   // 負担先の管理
-  h+='<div class="datehead">負担先の管理（誰の口座か）</div><div class="card">'
-    +data.payers.map(p=>'<div class="row between" style="padding:7px 0"><span>'+esc(p.name)+'</span><div class="row" style="gap:4px"><button class="del" style="color:var(--primary)" onclick="editPayer('+p.id+')">名前変更</button><button class="del" onclick="deletePayer('+p.id+')">削除</button></div></div>').join("")
-    +'<div class="row" style="gap:8px;margin-top:8px"><input id="payer_name" placeholder="例: お父さん / お母さん"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addPayer()">追加</button></div></div>';
+  h+='<div class="datehead">負担先の管理（誰の口座か）</div><div class="card"><div data-reorder="payer">'
+    +data.payers.map((p,i)=>'<div class="dragrow" data-idx="'+i+'">'+dragHandleSVG()+'<div class="dragmain"><span class="nm">'+esc(p.name)+'</span></div><div class="acts"><button class="del" style="color:var(--primary)" onclick="editPayer('+p.id+')">名前変更</button><button class="del" onclick="deletePayer('+p.id+')">削除</button></div></div>').join("")
+    +'</div><div class="row" style="gap:8px;margin-top:8px"><input id="payer_name" placeholder="例: お父さん / お母さん"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addPayer()">追加</button></div></div>';
   // 支払い方法の管理
   const eM=ui.editMethodId?ui.editMethod:null; const typeLabels={card:"カード",cash:"現金",bank:"口座引落"};
-  h+='<div class="datehead">支払い方法の管理（カード等）</div><div class="card">'
-    +data.methods.map(mm=>'<div class="row between" style="padding:7px 0"><span>'+esc(mm.name)+' <span class="muted">'+(typeLabels[mm.type]||mm.type)+'・'+esc(payerName(mm.payerId))+'</span></span><div class="row" style="gap:4px"><button class="del" style="color:var(--primary)" onclick="editMethod('+mm.id+')">編集</button><button class="del" onclick="deleteMethod('+mm.id+')">削除</button></div></div>').join("")
-    +'<div class="fpgroup">'+(eM?'<div class="editbar"><span>支払い方法を編集中</span><button onclick="cancelEditMethod()">やめる</button></div>':'')
+  h+='<div class="datehead">支払い方法の管理（カード等）</div><div class="card"><div data-reorder="method">'
+    +data.methods.map((mm,i)=>'<div class="dragrow" data-idx="'+i+'">'+dragHandleSVG()+'<div class="dragmain"><span class="nm">'+esc(mm.name)+' <span class="muted">'+(typeLabels[mm.type]||mm.type)+'・'+esc(payerName(mm.payerId))+'</span></span></div><div class="acts"><button class="del" style="color:var(--primary)" onclick="editMethod('+mm.id+')">編集</button><button class="del" onclick="deleteMethod('+mm.id+')">削除</button></div></div>').join("")
+    +'</div><div class="fpgroup">'+(eM?'<div class="editbar"><span>支払い方法を編集中</span><button onclick="cancelEditMethod()">やめる</button></div>':'')
     +'<label>名前（現金・口座引落は空欄でOK）</label><input id="m_name" value="'+(eM?esc(eM.name):"")+'" placeholder="例: 楽天カード">'
     +'<div class="row" style="gap:10px"><div style="flex:1"><label>種類</label><select id="m_type">'+["card","cash","bank"].map(t=>'<option value="'+t+'"'+((eM?eM.type===t:t==="card")?' selected':'')+'>'+typeLabels[t]+'</option>').join("")+'</select></div>'
     +'<div style="flex:1"><label>負担先</label><select id="m_payer">'+data.payers.map(p=>'<option value="'+p.id+'"'+((eM&&eM.payerId===p.id)?' selected':'')+'>'+esc(p.name)+'</option>').join("")+'</select></div></div>'
     +'<button class="btn sm mt" onclick="saveMethod()">'+(eM?"更新する":"支払い方法を追加")+'</button></div></div>';
-  h+='<div class="datehead">帳簿の管理（共有 / 自分だけ）</div><div class="card">'+data.ledgers.map(l=>'<div style="padding:9px 0;border-bottom:1px solid var(--border)"><div class="row between"><span><span style="display:inline-block;width:10px;height:10px;border-radius:5px;background:'+l.color+';margin-right:8px"></span>'+esc(l.name)+'</span><button class="del" onclick="deleteLedger('+l.id+')">削除</button></div><div class="row between" style="margin-top:6px"><span class="muted">'+(l.shared?ci("people",14)+" 共有する":ci("lock",14)+" 自分だけ（他の人には見えない）")+'</span><label class="switch"><input type="checkbox" '+(l.shared?"checked":"")+' onchange="toggleShare('+l.id+')"><span class="track"></span></label></div></div>').join("")+'<label style="margin-top:12px">新しい帳簿を追加</label><input id="l_name" placeholder="例: 妻の家計 / 事業用"><div class="row between" style="margin-top:10px"><span>この帳簿を共有する</span><label class="switch"><input type="checkbox" id="l_shared"><span class="track"></span></label></div><button class="btn mt" onclick="addLedger()">帳簿を追加</button></div>';
+  h+='<div class="datehead">帳簿の管理（共有 / 自分だけ）</div><div class="card"><div data-reorder="ledger">'+data.ledgers.map((l,i)=>'<div class="dragrow" data-idx="'+i+'" style="flex-wrap:wrap">'+dragHandleSVG()+'<div class="dragmain"><span style="display:inline-block;width:10px;height:10px;border-radius:5px;background:'+l.color+';margin-right:6px;flex:none"></span><span class="nm">'+esc(l.name)+'</span></div><div class="acts"><button class="del" onclick="deleteLedger('+l.id+')">削除</button></div><div class="row between" style="width:100%;margin-top:6px;padding-left:30px"><span class="muted">'+(l.shared?ci("people",14)+" 共有する":ci("lock",14)+" 自分だけ（他の人には見えない）")+'</span><label class="switch"><input type="checkbox" '+(l.shared?"checked":"")+' onchange="toggleShare('+l.id+')"><span class="track"></span></label></div></div>').join("")+'</div><label style="margin-top:12px">新しい帳簿を追加</label><input id="l_name" placeholder="例: 妻の家計 / 事業用"><div class="row between" style="margin-top:10px"><span>この帳簿を共有する</span><label class="switch"><input type="checkbox" id="l_shared"><span class="track"></span></label></div><button class="btn mt" onclick="addLedger()">帳簿を追加</button><div class="muted mt">≡をつまんでドラッグで、上のタブに出る帳簿の順番を変えられます。</div></div>';
   h+='<div class="datehead">データの受け渡し</div><div class="card">'
     +'<div class="sub" style="margin-bottom:8px">今の記録を <b>1つのHTMLファイルに埋め込んで書き出し</b>ます。そのファイルを送れば、相手は<b>あなたのデータ入りの状態</b>で開けます（アプリ・ログイン不要）。</div>'
     +'<button class="btn" onclick="exportWithData()">データ入りで書き出す（配布用）</button></div>';
@@ -504,6 +518,49 @@ function viewSettings(){ const y=new Date().getFullYear(); let h='<h2>設定・�
   h+='<div class="center" style="margin:4px 0 4px"><button onclick="resetAll()" style="background:none;border:none;color:var(--light);font-size:11px;text-decoration:underline;padding:6px">データを初期化</button></div>';
   return h;
 }
+
+/* ---------- 並び替え（ドラッグ）エンジン：iOS Safari対応・ポインタ方式 ---------- */
+/* data-reorder="<key>" のコンテナ内で .draghandle をドラッグすると、
+   window.onReorder(key, fromIndex, toIndex) が呼ばれる。各行は .dragrow で data-idx を持つ。*/
+(function(){
+  let st=null;
+  function rowsOf(container){ return Array.prototype.slice.call(container.querySelectorAll(".dragrow")); }
+  function clearMarks(container){ rowsOf(container).forEach(r=>{ r.classList.remove("dragover"); r.classList.remove("dragging"); }); }
+  function startDrag(handle, ev){
+    const row=handle.closest(".dragrow"); const container=handle.closest("[data-reorder]"); if(!row||!container)return;
+    ev.preventDefault();
+    const pt=ev.touches?ev.touches[0]:ev;
+    const rect=row.getBoundingClientRect();
+    const ghost=document.createElement("div"); ghost.className="dragghost"; ghost.style.width=rect.width+"px";
+    ghost.innerHTML=row.querySelector(".dragmain")?row.querySelector(".dragmain").innerHTML:row.textContent;
+    document.body.appendChild(ghost);
+    st={container,row,ghost,offY:pt.clientY-rect.top,offX:pt.clientX-rect.left,fromIdx:parseInt(row.getAttribute("data-idx"),10),key:container.getAttribute("data-reorder"),curOver:null};
+    row.classList.add("dragging");
+    positionGhost(pt.clientX,pt.clientY);
+    document.addEventListener("pointermove",onMove,{passive:false});
+    document.addEventListener("pointerup",onUp);
+    document.addEventListener("pointercancel",onUp);
+  }
+  function positionGhost(x,y){ if(!st)return; st.ghost.style.transform="translate("+(x-st.offX)+"px,"+(y-st.offY)+"px)"; }
+  function onMove(ev){ if(!st)return; ev.preventDefault(); const x=ev.clientX,y=ev.clientY; positionGhost(x,y);
+    const rows=rowsOf(st.container); let over=null;
+    for(const r of rows){ if(r===st.row)continue; const rc=r.getBoundingClientRect(); if(y>=rc.top&&y<=rc.bottom){ over=r; break; } }
+    if(st.curOver&&st.curOver!==over) st.curOver.classList.remove("dragover");
+    if(over){ over.classList.add("dragover"); st.curOver=over; } else if(st.curOver&&!over){ st.curOver.classList.remove("dragover"); st.curOver=null; }
+  }
+  function onUp(){ if(!st)return;
+    document.removeEventListener("pointermove",onMove); document.removeEventListener("pointerup",onUp); document.removeEventListener("pointercancel",onUp);
+    const container=st.container, from=st.fromIdx; let to=null;
+    if(st.curOver){ to=parseInt(st.curOver.getAttribute("data-idx"),10); }
+    if(st.ghost&&st.ghost.parentNode) st.ghost.parentNode.removeChild(st.ghost);
+    clearMarks(container);
+    const key=st.key; st=null;
+    if(to!=null&&to!==from&&typeof window.onReorder==="function"){ window.onReorder(key,from,to); }
+  }
+  // ハンドルでのドラッグ開始（委譲）
+  document.addEventListener("pointerdown",function(ev){ const h=ev.target.closest?ev.target.closest(".draghandle"):null; if(h) startDrag(h,ev); });
+})();
+function dragHandleSVG(){ return '<span class="draghandle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h.01M8 12h.01M8 18h.01M16 6h.01M16 12h.01M16 18h.01"/></svg></span>'; }
 
 /* ---------- 完了トースト（画面中央・チェック＋一言） ---------- */
 let _toastTimer=null, _toastHide=null;
@@ -566,6 +623,16 @@ function render(){ const _sy=window.scrollY||window.pageYOffset||0; let v="";
 window.setTab=function(t){ clearEdits(); ui.methodDetailId=null; ui.tab=t; render(); };
 window.switchLedger=function(id){ data.currentLedgerId=id; save(); render(); };
 window.setTxType=function(t){ if(!ui.editTxId){ const de=document.getElementById("f_date"); if(de&&de.value) ui.prefillDate=de.value; } ui.txType=t; render(); };
+function moveInArray(arr,from,to){ if(from<0||from>=arr.length||to<0||to>=arr.length)return; const it=arr.splice(from,1)[0]; arr.splice(to,0,it); }
+window.onReorder=function(key,from,to){
+  if(key==="cat:expense") moveInArray(data.categories.expense,from,to);
+  else if(key==="cat:income") moveInArray(data.categories.income,from,to);
+  else if(key==="payer") moveInArray(data.payers,from,to);
+  else if(key==="method") moveInArray(data.methods,from,to);
+  else if(key==="ledger") moveInArray(data.ledgers,from,to);
+  else return;
+  save(); render(); showToast("並び替えました");
+};
 window.pickCat=function(el){ for(const c of el.parentNode.children)c.classList.remove("on"); el.classList.add("on"); };
 window.changeMonth=function(dl){ const d=new Date(ui.month.y,ui.month.m+dl,1); ui.month={y:d.getFullYear(),m:d.getMonth()}; ui.selectedDate=null; ui.methodDetailId=null; render(); };
 window.setCalView=function(v){ ui.calView=v; render(); };
