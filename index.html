@@ -29,6 +29,8 @@
   .muted{color:var(--light); font-size:13px;} .sub{color:var(--sub); font-size:13px;}
   label{display:block; font-size:13px; color:var(--sub); font-weight:600; margin:12px 0 6px;}
   input,select,textarea{width:100%; padding:12px; border:1px solid var(--border); border-radius:12px; font-size:16px; background:#fff; color:var(--text); font-family:inherit;}
+  input[type=date],input[type=datetime-local]{-webkit-appearance:none; appearance:none; max-width:100%; min-width:0; display:block;}
+  input[type=date]::-webkit-date-and-time-value{text-align:left;}
   textarea{height:70px; resize:vertical;}
   button{font-family:inherit; cursor:pointer;}
   .btn{display:block; width:100%; background:var(--primary); color:#fff; border:none; border-radius:12px; padding:14px; font-size:16px; font-weight:700; margin-top:6px;}
@@ -222,7 +224,8 @@ const ui={ tab:"home", month:{y:now.getFullYear(),m:now.getMonth()}, selectedDat
   settingsOpen:false, txType:"expense", prefillDate:null, invKind:"stock", invAction:"buy",
   goalType:"want", flash:null, lastMethodId:null, editMethodId:null, editMethod:null, methodDetailId:null,
   editTxId:null, editTx:null, editInvId:null, editInv:null, editGoalId:null, editGoal:null,
-  settleOpen:false, settleSel:{} };
+  settleOpen:false, settleSel:{},
+  csvMonth:null, csvCats:{}, csvPayee:true };
 function clearEdits(){ ui.editTxId=null; ui.editTx=null; ui.editInvId=null; ui.editInv=null; ui.editGoalId=null; ui.editGoal=null; ui.editMethodId=null; ui.editMethod=null; }
 function payerName(id){ const p=(data.payers||[]).find(x=>x.id===id); return p?p.name:"未設定"; }
 function methodById(id){ return (data.methods||[]).find(m=>m.id===id); }
@@ -341,6 +344,18 @@ function exportMedicalCsv(year){ const rows=ledgerTx().filter(t=>(t.medical||t.t
   lines.push(""); lines.push(["","","","合計",total,reimb,"控除対象概算: "+(total-reimb)+"円"].map(csvEscape).join(","));
   const blob=new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
   const a=document.createElement("a"); a.href=url; a.download="医療費控除_"+curLedger().name+"_"+year+".csv"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
+/* 期間・カテゴリを選んで支出をCSV出力（生活費の請求などに） */
+function exportExpenseCsv(ym, cats, withPayee){
+  // ym: "YYYY-MM"（会計期間ではなく暦月で分かりやすく）, cats: 配列（空なら全カテゴリ）, withPayee: 支払先を含めるか
+  const catSet=(cats&&cats.length)?new Set(cats):null;
+  const rows=ledgerTx().filter(t=>t.type==="expense"&&!isAdvance(t)&&(t.date||"").slice(0,7)===ym&&(!catSet||catSet.has(t.category||"未分類"))).sort((a,b)=>a.date<b.date?-1:1);
+  if(!rows.length){ alert(ym+" に該当する支出がありません。"); return; }
+  const head=withPayee?["日付","カテゴリ","支払先","金額","メモ"]:["日付","カテゴリ","金額","メモ"];
+  const lines=[head.map(csvEscape).join(",")]; let total=0;
+  for(const r of rows){ total+=r.amount; const row=withPayee?[r.date,r.category||"",r.payee||"",r.amount,r.memo||""]:[r.date,r.category||"",r.amount,r.memo||""]; lines.push(row.map(csvEscape).join(",")); }
+  lines.push(""); const totalRow=withPayee?["","","合計",total,""]:["","合計",total,""]; lines.push(totalRow.map(csvEscape).join(","));
+  const blob=new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download="支出_"+curLedger().name+"_"+ym+".csv"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
 
 /* ---------- 共通パーツ ---------- */
 function ledgerBar(){ return '<div class="ledgers">'+data.ledgers.map(l=>'<button class="ltab '+(l.id===data.currentLedgerId?"on":"")+'" style="border-color:'+l.color+';'+(l.id===data.currentLedgerId?"background:"+l.color+";":"")+'" onclick="switchLedger('+l.id+')">'+(l.shared?ci("people",14):ci("lock",14))+' '+esc(l.name)+'</button>').join("")+'</div>'; }
@@ -426,11 +441,13 @@ function viewInput(){ const cats=ui.txType==="income"?data.categories.income:dat
   if(ui.txType==="expense"){ const selM=e?e.methodId:ui.lastMethodId;
     h+='<label>支払い方法</label><div class="chips" id="f_methods">'+(data.methods.length?data.methods.map(m=>'<button class="chip'+((selM===m.id)?" on":"")+'" data-mid="'+m.id+'" onclick="pickCat(this)">'+esc(m.name)+'</button>').join(""):'<span class="muted">設定で追加できます</span>')+'</div>'; }
   h+='<label>支払先 / 店名（任意）</label><input id="f_payee" value="'+(e?esc(e.payee):"")+'" placeholder="例: 〇〇スーパー"><label>メモ（任意）</label><textarea id="f_memo">'+(e?esc(e.memo):"")+'</textarea></div>';
+  h+='<button class="btn" onclick="saveTx()">'+(e?"更新する":"保存する")+'</button>';
+  if(ui.txType==="expense") h+='<div class="muted center" style="margin:8px 0 4px">↓ 立替・医療費控除など（必要な人だけ）</div>';
   if(ui.txType==="expense"){ const isAdv=e&&e.advance; const isSet=e&&e.settled;
     h+='<div class="card"><div class="toggle-row"><span>'+ci("swap",16,"var(--accent)")+' 立替（会社・友人などから<b>あとで戻る</b>お金）</span>'+sw("f_advance",isAdv)+'</div>'
       +'<div class="muted mt">オンにすると<b>月の収支・グラフには含めず</b>、口座からは一旦引いた扱いになります。戻ってきたら「立替の精算」で回収してください。'+(isSet?'<br><b style="color:var(--primary)">この立替は回収済みです（'+esc(e.settledDate||"")+'）。編集で立替を外すと回収記録も消えます。</b>':'')+'</div></div>'; }
   if(ui.txType==="expense") h+='<div class="card"><div style="font-weight:700;color:var(--medical);margin-bottom:4px">医療費控除の対象</div><div class="toggle-row"><span>'+ci("medical",16,"var(--medical)")+' 医療費（診療・薬など）</span>'+sw("f_medical",e&&e.medical)+'</div><div class="toggle-row"><span>'+ci("transport",16,"var(--income)")+' 通院交通費</span>'+sw("f_transport",e&&e.transport)+'</div><label>医療を受けた人</label><input id="f_person" value="'+(e?esc(e.person):"")+'" placeholder="例: 本人 / 配偶者 / 子"><label>保険等で補填される金額（任意）</label><input id="f_reimb" type="number" inputmode="numeric" value="'+(e&&e.reimbursed?e.reimbursed:"")+'" placeholder="0"><div class="muted mt">※病院・薬局名は「支払先」に入れると控除明細に出力されます。</div></div>';
-  h+='<button class="btn" onclick="saveTx()">'+(e?"更新する":"保存する")+'</button>'; return h;
+  if(ui.txType==="expense") h+='<button class="btn" onclick="saveTx()">'+(e?"更新する":"保存する")+'</button>'; return h;
 }
 function sw(id,checked){ return '<label class="switch"><input type="checkbox" id="'+id+'"'+(checked?" checked":"")+'><span class="track"></span></label>'; }
 
@@ -564,6 +581,20 @@ function viewPlan(){ const ps=planSet();
 /* ---------- 目標（操作） ---------- */
 function viewSettings(){ const y=new Date().getFullYear(); let h='<h2>設定・エクスポート</h2>';
   h+='<div class="datehead">医療費控除の出力（'+esc(curLedger().name)+'）</div><div class="card"><label>対象年</label><select id="s_year">'+[y,y-1,y-2].map(v=>'<option value="'+v+'">'+v+'年</option>').join("")+'</select><button class="btn mt" onclick="exportMedicalCsv(document.getElementById(\'s_year\').value)">CSVで出力（ダウンロード）</button></div>';
+  // カテゴリを選んで支出CSV（生活費の請求など）
+  {
+    const nowY=y, nowM=new Date().getMonth()+1; const curYM=ui.csvMonth||(nowY+"-"+pad(nowM));
+    const monthOpts=[]; for(let k=0;k<12;k++){ const dt=new Date(nowY,new Date().getMonth()-k,1); const ym=dt.getFullYear()+"-"+pad(dt.getMonth()+1); monthOpts.push('<option value="'+ym+'"'+(ym===curYM?' selected':'')+'>'+dt.getFullYear()+'年'+(dt.getMonth()+1)+'月</option>'); }
+    const selCats=Object.keys(ui.csvCats).filter(k=>ui.csvCats[k]);
+    h+='<div class="datehead">支出のCSV出力（カテゴリを選んで／生活費の請求などに）</div><div class="card">'
+      +'<label>対象の月</label><select id="csv_month" onchange="setCsvMonth(this.value)">'+monthOpts.join("")+'</select>'
+      +'<label style="margin-top:12px">カテゴリ（選んだものだけ出力。未選択なら全カテゴリ）</label>'
+      +'<div class="chips">'+data.categories.expense.map(c=>'<button class="chip'+(ui.csvCats[c]?" on":"")+'" onclick="toggleCsvCat(this,\''+esc(c).replace(/'/g,"\\'")+'\')">'+esc(c)+'</button>').join("")+'</div>'
+      +'<div class="row" style="gap:8px;margin-top:8px"><button class="btn ghost sm" style="width:auto;padding:8px 14px" onclick="csvCatAll(true)">全部選ぶ</button><button class="btn ghost sm" style="width:auto;padding:8px 14px" onclick="csvCatAll(false)">全部外す</button></div>'
+      +'<div class="toggle-row" style="margin-top:12px"><span>支払先も含める</span><label class="switch"><input type="checkbox" '+(ui.csvPayee?"checked":"")+' onchange="toggleCsvPayee()"><span class="track"></span></label></div>'
+      +'<button class="btn mt" onclick="doExportExpenseCsv()">CSVで出力（ダウンロード）</button>'
+      +'<div class="muted mt">選択中：'+(selCats.length?esc(selCats.join("・")):"全カテゴリ")+'。合計金額も末尾に付きます。立替中の支出は含まれません。</div></div>';
+  }
   const tabDefs=[["invest","投資"],["goals","目標"],["graph","グラフ"]];
   h+='<div class="datehead">表示するタブ（下のメニュー）</div><div class="card">'+tabDefs.map(t=>'<div class="toggle-row"><span>'+t[1]+'</span><label class="switch"><input type="checkbox" '+(data.prefs.tabs[t[0]]?"checked":"")+' onchange="toggleTab(\''+t[0]+'\')"><span class="track"></span></label></div>').join("")+'<div class="muted mt">使わないタブを隠せます（例：投資をしない方）。<b>非表示にしても入力したデータは消えず残ります</b>。もう一度オンにすれば元どおり表示されます。</div></div>';
   // 月のサイクル・週の始まり
@@ -825,6 +856,13 @@ window.setGoalType=function(t){ ui.goalType=t; render(); };
 window.updateFire=function(){ const ps=planSet(); ps.fireExpense=intval("p_fexp"); save(); render(); showToast("更新しました"); };
 window.updateStarting=function(){ const ps=planSet(); ps.startingAssets=intval("p_start"); ps.monthly=intval("p_mon"); ps.ret=parseFloat(val("p_ret"))||0; ps.years=parseInt(val("p_yrs"),10)||1; save(); render(); showToast("更新しました"); };
 window.exportMedicalCsv=exportMedicalCsv;
+window.setCsvMonth=function(v){ ui.csvMonth=v; };
+window.toggleCsvCat=function(el,c){ ui.csvCats[c]=!ui.csvCats[c]; if(el){ el.classList.toggle("on"); } };
+window.csvCatAll=function(on){ ui.csvCats={}; if(on){ for(const c of data.categories.expense) ui.csvCats[c]=true; } render(); };
+window.toggleCsvPayee=function(){ ui.csvPayee=!ui.csvPayee; };
+window.doExportExpenseCsv=function(){ const msel=document.getElementById("csv_month"); const ym=msel?msel.value:ui.csvMonth; if(!ym){ alert("対象の月を選んでください"); return; }
+  const cats=Object.keys(ui.csvCats).filter(k=>ui.csvCats[k]);
+  exportExpenseCsv(ym,cats,!!ui.csvPayee); };
 window.resetAll=function(){ showConfirm("すべての記録を消して、まっさらな初期状態に戻します。よろしいですか？（元に戻せません）",function(){ data=defaultData(); save(); ui.tab="home"; ui.selectedDate=null; render(); showToast("初期化しました"); }); };
 window.exportWithData=function(){ try{
   const seed='<scr'+'ipt>window.__SEED__='+JSON.stringify(data).replace(/</g,"\\u003c")+';</scr'+'ipt>';
