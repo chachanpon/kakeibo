@@ -91,6 +91,7 @@
   .dragrow.dragover{border-top:2px solid var(--primary);}
   .draghandle{flex:none; width:30px; height:34px; display:flex; align-items:center; justify-content:center; color:var(--light); cursor:grab; touch-action:none; border-radius:8px;}
   .draghandle:active{cursor:grabbing; background:var(--primary-l);}
+  .draghandle.holding{background:var(--primary); color:#fff; transform:scale(1.08);}
   .draghandle svg{width:18px; height:18px;}
   .dragmain{flex:1; min-width:0; display:flex; align-items:center; gap:8px; overflow:hidden;}
   .dragmain .nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
@@ -206,6 +207,8 @@ data.goals.forEach(g=>{ if(!g.type) g.type="want"; });
 if(!data.prefs) data.prefs={};
 if(!data.prefs.calShow) data.prefs.calShow={income:true,expense:true,balance:true,carryover:true,remaining:true};
 if(!data.prefs.tabs) data.prefs.tabs={invest:true,goals:true,graph:true};
+if(data.prefs.startDay==null) data.prefs.startDay=1;   // 月の始まり日（1〜28）。1＝暦通り
+if(data.prefs.weekStart==null) data.prefs.weekStart=0; // 週の開始曜日（0=日曜, 1=月曜）
 if(!data.payers){ const pid=nextId(); data.payers=[{id:pid,name:"自分"}]; }
 if(!data.methods){ data.methods=[{id:nextId(),name:"現金",type:"cash",payerId:data.payers[0].id}]; }
 data.ledgers.forEach(l=>{ if(l.shared===undefined) l.shared=false; });
@@ -229,6 +232,24 @@ function pad(n){ return String(n).padStart(2,"0"); }
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
 function nowLocal(){ const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes()); }
 function monthStr(){ return ui.month.y+"-"+pad(ui.month.m+1); }
+/* ---- 月のサイクル（締め日）ヘルパー ---- */
+function startDay(){ let d=parseInt(data.prefs.startDay,10); if(!d||d<1)d=1; if(d>28)d=28; return d; }
+function ymd(y,m,d){ /* m:0-based, 正規化して "YYYY-MM-DD" */ const dt=new Date(y,m,d); return dt.getFullYear()+"-"+pad(dt.getMonth()+1)+"-"+pad(dt.getDate()); }
+/* (y,m) で表される会計期間の [開始日, 終了日]（両端含む, 文字列） */
+function periodRange(y,m){ const D=startDay();
+  if(D===1){ return {start:ymd(y,m,1), end:ymd(y,m+1,0)}; }
+  // D>1: 前月D日 〜 当月(D-1)日
+  return {start:ymd(y,m-1,D), end:ymd(y,m,D-1)}; }
+function curRange(){ return periodRange(ui.month.y,ui.month.m); }
+function inCurPeriod(dateStr){ if(!dateStr)return false; const r=curRange(); const d=dateStr.slice(0,10); return d>=r.start&&d<=r.end; }
+function inPeriodYM(dateStr,y,m){ if(!dateStr)return false; const r=periodRange(y,m); const d=dateStr.slice(0,10); return d>=r.start&&d<=r.end; }
+/* 期間ラベル（締め日が1以外のとき、期間の実日付を添える） */
+function periodSubLabel(){ const D=startDay(); if(D===1)return ""; const r=curRange(); return r.start.replace(/-/g,"/")+"〜"+r.end.replace(/-/g,"/"); }
+/* 週の並び（開始曜日を反映）: 返り値は曜日インデックス配列 [0..6] を回転したもの */
+function weekOrder(){ const ws=(data.prefs.weekStart===1)?1:0; const arr=[]; for(let i=0;i<7;i++)arr.push((ws+i)%7); return arr; }
+/* 日付が属する会計期間のキー "YYYY-MM"（締め日考慮） */
+function periodKeyOf(dateStr){ const D=startDay(); const s=(dateStr||"").slice(0,10); if(!s)return ""; if(D===1)return s.slice(0,7);
+  const y=+s.slice(0,4),mo=+s.slice(5,7),da=+s.slice(8,10); let py=y,pm=mo; if(da>=D){ pm=mo+1; if(pm>12){pm=1;py=y+1;} } return py+"-"+pad(pm); }
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function curLedger(){ return data.ledgers.find(l=>l.id===data.currentLedgerId)||data.ledgers[0]; }
 function ledgerTx(){ return data.transactions.filter(t=>t.ledgerId===data.currentLedgerId); }
@@ -236,9 +257,9 @@ function ledgerInv(){ return data.investments.filter(i=>i.ledgerId===data.curren
 function val(id){ const e=document.getElementById(id); return e?e.value.trim():""; }
 function intval(id){ return parseInt((val(id)||"").replace(/[,\s]/g,""),10)||0; }
 function chk(id){ const e=document.getElementById(id); return !!(e&&e.checked); }
-function monthlySummary(m){ let i=0,e=0; for(const t of ledgerTx()){ if((t.date||"").slice(0,7)===m){ if(t.type==="income")i+=t.amount; else e+=t.amount; } } return {income:i,expense:e,balance:i-e}; }
-function balanceBefore(ms){ let n=0; for(const t of ledgerTx()){ if((t.date||"")<ms) n+=(t.type==="income"?t.amount:-t.amount); } return n; }
-function dailyTotals(m){ const map={}; for(const t of ledgerTx()){ const d=t.date||""; if(d.slice(0,7)!==m)continue; if(!map[d])map[d]={income:0,expense:0}; if(t.type==="income")map[d].income+=t.amount; else map[d].expense+=t.amount; } return map; }
+function monthlySummary(m){ const r=curRange(); let i=0,e=0; for(const t of ledgerTx()){ const d=(t.date||"").slice(0,10); if(d>=r.start&&d<=r.end){ if(t.type==="income")i+=t.amount; else e+=t.amount; } } return {income:i,expense:e,balance:i-e}; }
+function balanceBefore(ms){ const r=curRange(); let n=0; for(const t of ledgerTx()){ if((t.date||"").slice(0,10)<r.start) n+=(t.type==="income"?t.amount:-t.amount); } return n; }
+function dailyTotals(m){ const r=curRange(); const map={}; for(const t of ledgerTx()){ const d=(t.date||"").slice(0,10); if(d<r.start||d>r.end)continue; if(!map[d])map[d]={income:0,expense:0}; if(t.type==="income")map[d].income+=t.amount; else map[d].expense+=t.amount; } return map; }
 function last12Expense(){ const s=new Date(now.getFullYear(),now.getMonth()-11,1); let sum=0; for(const t of ledgerTx()){ if(t.type!=="expense")continue; if(new Date(t.date)>=s) sum+=t.amount; } return sum; }
 function monthsUntil(dl){ if(!dl)return null; const d=new Date(dl); const mo=(d.getFullYear()-now.getFullYear())*12+(d.getMonth()-now.getMonth()); return mo>0?mo:null; }
 function planSet(){ const id=data.currentLedgerId; if(!data.planSettings[id]) data.planSettings[id]={startingAssets:0,monthly:0,ret:3,years:20,fireExpense:0}; const p=data.planSettings[id]; if(p.startingAssets===undefined)p.startingAssets=0; return p; }
@@ -249,8 +270,8 @@ function cumulativeNet(){ let n=0; for(const t of ledgerTx()) n+=(t.type==="inco
 function cashAssets(){ return (planSet().startingAssets||0)+cumulativeNet(); } // 貯金（現金）＝初期資産＋収支累計
 function investmentCost(){ let s=0; for(const i of ledgerInv()){ if(i.action==="buy")s+=i.amount; else if(i.action==="sell")s-=i.amount; } return s; } // 取得ベースの投資残高
 function totalAssets(){ return cashAssets()+investmentCost(); }
-function avgMonthlyExpense(){ const ms=new Set(); let s=0; for(const t of ledgerTx()){ if(t.type==="expense"){ ms.add((t.date||"").slice(0,7)); s+=t.amount; } } return ms.size?Math.round(s/ms.size):0; }
-function avgMonthlySavings(){ const ms=new Set(); let n=0; for(const t of ledgerTx()){ ms.add((t.date||"").slice(0,7)); n+=(t.type==="income"?t.amount:-t.amount); } return ms.size?Math.round(n/ms.size):0; }
+function avgMonthlyExpense(){ const ms=new Set(); let s=0; for(const t of ledgerTx()){ if(t.type==="expense"){ ms.add(periodKeyOf(t.date)); s+=t.amount; } } return ms.size?Math.round(s/ms.size):0; }
+function avgMonthlySavings(){ const ms=new Set(); let n=0; for(const t of ledgerTx()){ ms.add(periodKeyOf(t.date)); n+=(t.type==="income"?t.amount:-t.amount); } return ms.size?Math.round(n/ms.size):0; }
 function yearlyNetWorth(){ const ys=new Set(); for(const t of ledgerTx()) if(t.date)ys.add(+t.date.slice(0,4)); for(const i of ledgerInv()) if(i.tradedAt)ys.add(+i.tradedAt.slice(0,4));
   if(!ys.size) return []; const arr=[...ys].sort((a,b)=>a-b); const out=[];
   for(let y=arr[0];y<=arr[arr.length-1];y++){ const cut=y+"-12-31"; let cash=(planSet().startingAssets||0);
@@ -301,7 +322,7 @@ function exportMedicalCsv(year){ const rows=ledgerTx().filter(t=>(t.medical||t.t
 
 /* ---------- 共通パーツ ---------- */
 function ledgerBar(){ return '<div class="ledgers">'+data.ledgers.map(l=>'<button class="ltab '+(l.id===data.currentLedgerId?"on":"")+'" style="border-color:'+l.color+';'+(l.id===data.currentLedgerId?"background:"+l.color+";":"")+'" onclick="switchLedger('+l.id+')">'+(l.shared?ci("people",14):ci("lock",14))+' '+esc(l.name)+'</button>').join("")+'</div>'; }
-function monthNav(){ return '<div class="mnav"><button onclick="changeMonth(-1)">‹</button><div class="mtitle">'+ui.month.y+'年'+(ui.month.m+1)+'月</div><button onclick="changeMonth(1)">›</button></div>'; }
+function monthNav(){ const sub=periodSubLabel(); return '<div class="mnav"><button onclick="changeMonth(-1)">‹</button><div style="text-align:center"><div class="mtitle">'+ui.month.y+'年'+(ui.month.m+1)+'月</div>'+(sub?'<div class="muted" style="font-size:11px;margin-top:-2px">'+sub+'</div>':'')+'</div><button onclick="changeMonth(1)">›</button></div>'; }
 function txRow(t){ const flags=(t.medical?" "+ci("medical",13,"var(--medical)"):"")+(t.transport?" "+ci("transport",13,"var(--income)"):"");
   return '<div class="txrow tap" onclick="editTx('+t.id+')"><span class="amt" style="min-width:92px;color:'+(t.type==="income"?"var(--income)":"var(--expense)")+'">'+(t.type==="income"?"+":"-")+yen(t.amount)+'</span>'
     +'<span style="flex:1;text-align:right;color:var(--text);margin:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t.category||(t.type==="income"?"収入":"支出"))+(t.payee?" ・ "+esc(t.payee):"")+flags+'</span>'
@@ -318,19 +339,27 @@ function viewHome(){
   h+='</div>';
   h+='<div class="seg"><button class="'+(ui.calView==="calendar"?"on":"")+'" onclick="setCalView(\'calendar\')">カレンダー</button><button class="'+(ui.calView==="list"?"on":"")+'" onclick="setCalView(\'list\')">一覧</button></div>';
   if(ui.calView==="calendar"){
-    h+='<div class="card" style="padding:12px"><div class="wdrow">'+WEEK.map((w,i)=>'<div class="wd '+(i===0?"sun":i===6?"sat":"")+'">'+w+'</div>').join("")+'</div><div class="calwrap"><div class="cal">';
-    const fw=new Date(ui.month.y,ui.month.m,1).getDay(), dim=new Date(ui.month.y,ui.month.m+1,0).getDate(); const cells=[]; for(let i=0;i<fw;i++)cells.push(null); for(let d=1;d<=dim;d++)cells.push(d); while(cells.length%7)cells.push(null); const tstr=todayStr();
-    h+=cells.map((dd,idx)=>{ if(dd==null)return '<div class="cell"></div>'; const ds=m+"-"+pad(dd),info=daily[ds],wd=idx%7,isT=ds===tstr,isS=ds===ui.selectedDate;
+    const wo=weekOrder();
+    h+='<div class="card" style="padding:12px"><div class="wdrow">'+wo.map(wd=>'<div class="wd '+(wd===0?"sun":wd===6?"sat":"")+'">'+WEEK[wd]+'</div>').join("")+'</div><div class="calwrap"><div class="cal">';
+    const r=curRange(); const ws=(data.prefs.weekStart===1)?1:0;
+    // 期間の開始日〜終了日を実日付で並べる
+    const sd=new Date(r.start+"T00:00:00"), ed=new Date(r.end+"T00:00:00");
+    const days=[]; for(let t=new Date(sd); t<=ed; t.setDate(t.getDate()+1)){ days.push(new Date(t)); }
+    // 先頭の空白（週開始曜日に合わせる）
+    const firstWd=sd.getDay(); let lead=(firstWd-ws+7)%7;
+    const cells=[]; for(let i=0;i<lead;i++)cells.push(null); for(const d of days)cells.push(d); while(cells.length%7)cells.push(null);
+    const tstr=todayStr();
+    h+=cells.map((d)=>{ if(d==null)return '<div class="cell"></div>'; const ds=ymd(d.getFullYear(),d.getMonth(),d.getDate()); const info=daily[ds]; const wd=d.getDay(); const isT=ds===tstr,isS=ds===ui.selectedDate; const dd=d.getDate();
       return '<button class="cell '+(isS?"sel":"")+'" onclick="selectDay(\''+ds+'\')"><div class="d '+(wd===0?"sun":wd===6?"sat":"")+'">'+(isT?'<span class="today">'+dd+'</span>':dd)+'</div>'+(info&&info.income?'<div class="ci">+'+info.income.toLocaleString("ja-JP")+'</div>':'')+(info&&info.expense?'<div class="ce">-'+info.expense.toLocaleString("ja-JP")+'</div>':'')+'</button>'; }).join("");
     h+='</div></div><div class="legend"><span style="color:var(--income)">■ 収入（青）</span><span style="color:var(--expense)">■ 支出（赤）</span></div></div>';
     h+='<div class="card"><div style="font-weight:700">'+(ui.selectedDate?esc(ui.selectedDate)+" の記録":"日付をタップすると明細・入力ができます")+'</div>';
     if(ui.selectedDate){ h+='<button class="btn sm mt" onclick="inputForDate(\''+ui.selectedDate+'\')">＋ この日（'+ui.selectedDate+'）に入力</button>'; const dt=ledgerTx().filter(t=>t.date===ui.selectedDate); h+= dt.length?dt.map(txRow).join(""):'<div class="muted center mt">この日の記録はまだありません</div>'; }
     h+='</div>';
   } else {
-    const list=ledgerTx().filter(t=>(t.date||"").slice(0,7)===m).sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:b.id-a.id);
+    const list=ledgerTx().filter(t=>inCurPeriod(t.date)).sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:b.id-a.id);
     h+='<div class="card">'; if(!list.length)h+='<div class="muted center">この月の記録はありません</div>'; else{ let cur=""; for(const t of list){ if(t.date!==cur){cur=t.date;h+='<div class="datehead">'+t.date+'</div>';} h+=txRow(t);} } h+='</div>';
   }
-  const cm={}; for(const t of ledgerTx()){ if((t.date||"").slice(0,7)===m&&t.type==="expense") cm[t.category||"未分類"]=(cm[t.category||"未分類"]||0)+t.amount; }
+  const cm={}; for(const t of ledgerTx()){ if(inCurPeriod(t.date)&&t.type==="expense") cm[t.category||"未分類"]=(cm[t.category||"未分類"]||0)+t.amount; }
   const cats=Object.entries(cm).sort((a,b)=>b[1]-a[1]);
   h+='<div class="datehead">支出の内訳</div><div class="card">';
   if(cats.length){ const total=cats.reduce((s,c)=>s+c[1],0);
@@ -412,16 +441,16 @@ function viewInvest(){ const K=ui.invKind,A=ui.invAction; const invs=ledgerInv()
 
 /* ---------- グラフ ---------- */
 function viewGraph(){ const m=monthStr(); const inc={},exp={};
-  for(const t of ledgerTx()){ if((t.date||"").slice(0,7)!==m)continue; const c=t.category||"未分類"; if(t.type==="income")inc[c]=(inc[c]||0)+t.amount; else exp[c]=(exp[c]||0)+t.amount; }
+  for(const t of ledgerTx()){ if(!inCurPeriod(t.date))continue; const c=t.category||"未分類"; if(t.type==="income")inc[c]=(inc[c]||0)+t.amount; else exp[c]=(exp[c]||0)+t.amount; }
   const toItems=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).map((e,i)=>({label:e[0],value:e[1],color:PALETTE[i%PALETTE.length]}));
-  const bars=[]; for(let k=11;k>=0;k--){ const d=new Date(ui.month.y,ui.month.m-k,1); const ms=d.getFullYear()+"-"+pad(d.getMonth()+1); let ii=0,ee=0; for(const t of ledgerTx()){ if((t.date||"").slice(0,7)===ms){ if(t.type==="income")ii+=t.amount; else ee+=t.amount; } } bars.push({label:(d.getMonth()+1)+"月",value:ii-ee}); }
+  const bars=[]; for(let k=11;k>=0;k--){ const y=ui.month.y, mm=ui.month.m-k; let ii=0,ee=0; for(const t of ledgerTx()){ if(inPeriodYM(t.date,y,mm)){ if(t.type==="income")ii+=t.amount; else ee+=t.amount; } } const d=new Date(y,mm,1); bars.push({label:(d.getMonth()+1)+"月",value:ii-ee}); }
   let h=ledgerBar()+monthNav();
   h+='<div class="datehead">支出の割合（'+(ui.month.m+1)+'月）</div><div class="card">'+pieSVG(toItems(exp))+'</div>';
   h+='<div class="datehead">収入の割合（'+(ui.month.m+1)+'月）</div><div class="card">'+pieSVG(toItems(inc))+'</div>';
   h+='<div class="datehead">毎月の貯金（収支）— 直近12ヶ月</div><div class="card">'+barSVG(bars)+'<div class="muted center mt">緑＝黒字（貯金） ／ 赤＝赤字</div></div>';
   // 支払い方法・負担先（今月・支出）
   const mExp={},pExp={};
-  for(const t of ledgerTx()){ if(t.type!=="expense"||(t.date||"").slice(0,7)!==m)continue; const mid=t.methodId||0; mExp[mid]=(mExp[mid]||0)+t.amount; const pid=methodPayerId(t.methodId)||0; pExp[pid]=(pExp[pid]||0)+t.amount; }
+  for(const t of ledgerTx()){ if(t.type!=="expense"||!inCurPeriod(t.date))continue; const mid=t.methodId||0; mExp[mid]=(mExp[mid]||0)+t.amount; const pid=methodPayerId(t.methodId)||0; pExp[pid]=(pExp[pid]||0)+t.amount; }
   if(Object.keys(mExp).length){
     const payerRows=data.payers.map(p=>[esc(p.name),pExp[p.id]||0]).filter(r=>r[1]>0); if(pExp[0])payerRows.push(["未設定",pExp[0]]); payerRows.sort((a,b)=>b[1]-a[1]);
     h+='<div class="datehead">口座負担（今月・誰の口座から出るか）</div><div class="card">'+(payerRows.length?payerRows.map(r=>'<div class="row between" style="padding:6px 0"><span>'+r[0]+'</span><b>'+yen(r[1])+'</b></div>').join(""):'<div class="muted center">データなし</div>')+'</div>';
@@ -429,7 +458,7 @@ function viewGraph(){ const m=monthStr(); const inc={},exp={};
     h+='<div class="datehead">支払い方法別の利用額（今月＝翌月の引き落とし目安）</div><div class="card">'+pieSVG(mItems.map(it=>({label:it.label,value:it.value,color:it.color})))
       +'<div class="muted center mt">タップでそのカードの明細</div>'+mItems.map(it=>'<div class="txrow tap" onclick="showMethodDetail('+it.mid+')"><span style="flex:1">'+esc(it.label)+'</span><b>'+yen(it.value)+'</b></div>').join("")+'</div>';
     if(ui.methodDetailId!=null){ const dm=ui.methodDetailId; const nm=dm===0?"未設定":(methodById(dm)?methodById(dm).name:"不明");
-      const list=ledgerTx().filter(t=>t.type==="expense"&&(t.date||"").slice(0,7)===m&&((t.methodId||0)===dm)).sort((a,b)=>a.date<b.date?1:-1);
+      const list=ledgerTx().filter(t=>t.type==="expense"&&inCurPeriod(t.date)&&((t.methodId||0)===dm)).sort((a,b)=>a.date<b.date?1:-1);
       h+='<div class="datehead">'+esc(nm)+' の明細（'+(ui.month.m+1)+'月）</div><div class="card">'+(list.length?list.map(txRow).join(""):'<div class="muted center">なし</div>')+'</div>'; }
   }
   return h;
@@ -495,6 +524,14 @@ function viewSettings(){ const y=new Date().getFullYear(); let h='<h2>設定・�
   h+='<div class="datehead">医療費控除の出力（'+esc(curLedger().name)+'）</div><div class="card"><label>対象年</label><select id="s_year">'+[y,y-1,y-2].map(v=>'<option value="'+v+'">'+v+'年</option>').join("")+'</select><button class="btn mt" onclick="exportMedicalCsv(document.getElementById(\'s_year\').value)">CSVで出力（ダウンロード）</button></div>';
   const tabDefs=[["invest","投資"],["goals","目標"],["graph","グラフ"]];
   h+='<div class="datehead">表示するタブ（下のメニュー）</div><div class="card">'+tabDefs.map(t=>'<div class="toggle-row"><span>'+t[1]+'</span><label class="switch"><input type="checkbox" '+(data.prefs.tabs[t[0]]?"checked":"")+' onchange="toggleTab(\''+t[0]+'\')"><span class="track"></span></label></div>').join("")+'<div class="muted mt">使わないタブを隠せます（例：投資をしない方）。<b>非表示にしても入力したデータは消えず残ります</b>。もう一度オンにすれば元どおり表示されます。</div></div>';
+  // 月のサイクル・週の始まり
+  const sd=startDay(); const wsVal=(data.prefs.weekStart===1)?1:0;
+  const dayOpts=[]; dayOpts.push('<option value="1"'+(sd===1?' selected':'')+'>1日（暦どおり）</option>'); for(let dd=2;dd<=28;dd++)dayOpts.push('<option value="'+dd+'"'+(sd===dd?' selected':'')+'>'+dd+'日</option>');
+  h+='<div class="datehead">月のサイクル・カレンダー</div><div class="card">'
+    +'<label>月の始まり（締め日）</label><select id="s_startday" onchange="setStartDay(this.value)">'+dayOpts.join("")+'</select>'
+    +'<div class="muted mt">'+(sd===1?'毎月1日〜末日で集計します。':'毎月'+sd+'日はじまり（例：前月'+sd+'日〜当月'+(sd-1)+'日）で「今月のまとめ」や繰越金を計算します。給料日や引き落としに合わせられます。')+'</div>'
+    +'<label style="margin-top:14px">週の始まりの曜日</label><div class="seg"><button class="'+(wsVal===0?"on":"")+'" onclick="setWeekStart(0)">日曜から</button><button class="'+(wsVal===1?"on":"")+'" onclick="setWeekStart(1)">月曜から</button></div>'
+    +'<div class="muted mt">カレンダーの左端の曜日が変わります。</div></div>';
   const catRow=(kind,c,i)=>'<div class="dragrow" data-idx="'+i+'">'+dragHandleSVG()+'<div class="dragmain"><span class="nm">'+esc(c)+'</span></div><div class="acts"><button class="del" onclick="deleteCategory(\''+kind+'\','+i+')">✕</button></div></div>';
   h+='<div class="datehead">カテゴリの管理</div><div class="card"><div class="sub" style="font-weight:700;margin-bottom:6px">支出のカテゴリ</div><div class="catman drag" data-reorder="cat:expense">'+data.categories.expense.map((c,i)=>catRow("expense",c,i)).join("")+'</div><div class="row" style="gap:8px;margin-top:8px"><input id="c_exp" placeholder="新しい支出カテゴリ"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addCategory(\'expense\')">追加</button></div><div class="sub" style="font-weight:700;margin:14px 0 6px">収入のカテゴリ</div><div class="catman drag" data-reorder="cat:income">'+data.categories.income.map((c,i)=>catRow("income",c,i)).join("")+'</div><div class="row" style="gap:8px;margin-top:8px"><input id="c_inc" placeholder="新しい収入カテゴリ"><button class="btn sm" style="width:auto;padding:10px 16px;margin:0" onclick="addCategory(\'income\')">追加</button></div><div class="muted mt">≡をつまんで上下にドラッグすると順番を変えられます。</div></div>';
   // 負担先の管理
@@ -523,26 +560,49 @@ function viewSettings(){ const y=new Date().getFullYear(); let h='<h2>設定・�
 /* data-reorder="<key>" のコンテナ内で .draghandle をドラッグすると、
    window.onReorder(key, fromIndex, toIndex) が呼ばれる。各行は .dragrow で data-idx を持つ。*/
 (function(){
-  let st=null;
+  let st=null;      // アクティブなドラッグ状態
+  let pending=null; // 長押し待ち状態（まだドラッグ開始前）
+  const HOLD_MS=200;   // この時間押し続けたらドラッグ開始
+  const MOVE_TOL=8;    // 開始前にこれ以上動いたらスクロールとみなして中止
   function rowsOf(container){ return Array.prototype.slice.call(container.querySelectorAll(".dragrow")); }
   function clearMarks(container){ rowsOf(container).forEach(r=>{ r.classList.remove("dragover"); r.classList.remove("dragging"); }); }
-  function startDrag(handle, ev){
-    const row=handle.closest(".dragrow"); const container=handle.closest("[data-reorder]"); if(!row||!container)return;
-    ev.preventDefault();
+
+  // --- 長押し待ち ---
+  function onPointerDown(ev){
+    const h=ev.target.closest?ev.target.closest(".draghandle"):null; if(!h)return;
+    const row=h.closest(".dragrow"); const container=h.closest("[data-reorder]"); if(!row||!container)return;
     const pt=ev.touches?ev.touches[0]:ev;
+    pending={handle:h,row,container,startX:pt.clientX,startY:pt.clientY,
+      timer:setTimeout(function(){ if(pending){ const p=pending; pending=null; beginDrag(p); } },HOLD_MS)};
+    h.classList.add("holding");
+    document.addEventListener("pointermove",onPendingMove,{passive:false});
+    document.addEventListener("pointerup",onPendingCancel);
+    document.addEventListener("pointercancel",onPendingCancel);
+  }
+  function onPendingMove(ev){ if(!pending)return; const x=ev.clientX,y=ev.clientY;
+    if(Math.abs(x-pending.startX)>MOVE_TOL||Math.abs(y-pending.startY)>MOVE_TOL){ cancelPending(); } }
+  function onPendingCancel(){ cancelPending(); }
+  function cancelPending(){ if(!pending)return; clearTimeout(pending.timer); pending.handle.classList.remove("holding"); pending=null;
+    document.removeEventListener("pointermove",onPendingMove); document.removeEventListener("pointerup",onPendingCancel); document.removeEventListener("pointercancel",onPendingCancel); }
+
+  // --- 実ドラッグ開始 ---
+  function beginDrag(p){
+    p.handle.classList.remove("holding");
+    document.removeEventListener("pointermove",onPendingMove); document.removeEventListener("pointerup",onPendingCancel); document.removeEventListener("pointercancel",onPendingCancel);
+    const row=p.row, container=p.container;
     const rect=row.getBoundingClientRect();
     const ghost=document.createElement("div"); ghost.className="dragghost"; ghost.style.width=rect.width+"px";
     ghost.innerHTML=row.querySelector(".dragmain")?row.querySelector(".dragmain").innerHTML:row.textContent;
     document.body.appendChild(ghost);
-    st={container,row,ghost,offY:pt.clientY-rect.top,offX:pt.clientX-rect.left,fromIdx:parseInt(row.getAttribute("data-idx"),10),key:container.getAttribute("data-reorder"),curOver:null};
+    st={container,row,ghost,offY:p.startY-rect.top,fixedX:rect.left,fromIdx:parseInt(row.getAttribute("data-idx"),10),key:container.getAttribute("data-reorder"),curOver:null};
     row.classList.add("dragging");
-    positionGhost(pt.clientX,pt.clientY);
+    positionGhost(p.startY);
     document.addEventListener("pointermove",onMove,{passive:false});
     document.addEventListener("pointerup",onUp);
     document.addEventListener("pointercancel",onUp);
   }
-  function positionGhost(x,y){ if(!st)return; st.ghost.style.transform="translate("+(x-st.offX)+"px,"+(y-st.offY)+"px)"; }
-  function onMove(ev){ if(!st)return; ev.preventDefault(); const x=ev.clientX,y=ev.clientY; positionGhost(x,y);
+  function positionGhost(y){ if(!st)return; st.ghost.style.transform="translate("+st.fixedX+"px,"+(y-st.offY)+"px)"; }
+  function onMove(ev){ if(!st)return; ev.preventDefault(); const y=ev.clientY; positionGhost(y);
     const rows=rowsOf(st.container); let over=null;
     for(const r of rows){ if(r===st.row)continue; const rc=r.getBoundingClientRect(); if(y>=rc.top&&y<=rc.bottom){ over=r; break; } }
     if(st.curOver&&st.curOver!==over) st.curOver.classList.remove("dragover");
@@ -557,8 +617,7 @@ function viewSettings(){ const y=new Date().getFullYear(); let h='<h2>設定・�
     const key=st.key; st=null;
     if(to!=null&&to!==from&&typeof window.onReorder==="function"){ window.onReorder(key,from,to); }
   }
-  // ハンドルでのドラッグ開始（委譲）
-  document.addEventListener("pointerdown",function(ev){ const h=ev.target.closest?ev.target.closest(".draghandle"):null; if(h) startDrag(h,ev); });
+  document.addEventListener("pointerdown",onPointerDown);
 })();
 function dragHandleSVG(){ return '<span class="draghandle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h.01M8 12h.01M8 18h.01M16 6h.01M16 12h.01M16 18h.01"/></svg></span>'; }
 
@@ -631,7 +690,7 @@ window.onReorder=function(key,from,to){
   else if(key==="method") moveInArray(data.methods,from,to);
   else if(key==="ledger") moveInArray(data.ledgers,from,to);
   else return;
-  save(); render(); showToast("並び替えました");
+  save(); render();
 };
 window.pickCat=function(el){ for(const c of el.parentNode.children)c.classList.remove("on"); el.classList.add("on"); };
 window.changeMonth=function(dl){ const d=new Date(ui.month.y,ui.month.m+dl,1); ui.month={y:d.getFullYear(),m:d.getMonth()}; ui.selectedDate=null; ui.methodDetailId=null; render(); };
@@ -677,6 +736,8 @@ window.deleteInv=function(id){ showConfirm("この取引を削除しますか？
 window.addLedger=function(){ const n=val("l_name"); if(!n){alert("帳簿名を入力してください");return;} const colors=["#8A6BB1","#C0563F","#E8A33D","#2E6FB4","#2E7D6B"]; data.ledgers.push({id:nextId(),name:n,kind:"other",color:colors[data.ledgers.length%colors.length],shared:chk("l_shared")}); save(); render(); showToast("帳簿を追加しました"); };
 window.toggleShare=function(id){ const l=data.ledgers.find(x=>x.id===id); l.shared=!l.shared; save(); render(); };
 window.toggleTab=function(key){ data.prefs.tabs[key]=!data.prefs.tabs[key]; if(!data.prefs.tabs[key]&&ui.tab===key) ui.tab="settings"; save(); render(); };
+window.setStartDay=function(v){ let d=parseInt(v,10); if(!d||d<1)d=1; if(d>28)d=28; data.prefs.startDay=d; save(); render(); showToast("設定しました"); };
+window.setWeekStart=function(v){ data.prefs.weekStart=(parseInt(v,10)===1)?1:0; save(); render(); showToast("設定しました"); };
 window.addPayer=function(){ const n=val("payer_name"); if(!n){alert("負担先の名前を入力してください");return;} data.payers.push({id:nextId(),name:n}); save(); render(); showToast("追加しました"); };
 window.editPayer=function(id){ const p=data.payers.find(x=>x.id===id); if(!p)return; showTextPrompt("負担先の名前",p.name,function(v){ if(v){ p.name=v; save(); render(); showToast("変更しました"); } }); };
 window.deletePayer=function(id){ showConfirm("この負担先を削除しますか？（この負担先を使っている支払い方法は「未設定」になります）",function(){ data.payers=data.payers.filter(p=>p.id!==id); data.methods.forEach(m=>{ if(m.payerId===id)m.payerId=null; }); save(); render(); showToast("削除しました"); }); };
@@ -740,4 +801,3 @@ render();
 </script>
 </body>
 </html>
-
