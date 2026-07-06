@@ -106,6 +106,11 @@
   .calc-grid button.op{background:var(--primary-l); color:var(--primary);}
   .calc-grid button.eq{background:var(--primary); color:#fff;}
   .flash{background:var(--primary); color:#fff; border-radius:12px; padding:10px 14px; font-weight:700; text-align:center; margin-bottom:12px;}
+  #toast{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:100;}
+  #toast .toast{background:rgba(35,44,40,.94); color:#fff; border-radius:16px; padding:16px 22px; font-weight:700; font-size:15px; max-width:78%; text-align:center; display:flex; align-items:center; gap:9px; box-shadow:0 8px 30px rgba(0,0,0,.25); opacity:0; transform:scale(.9); transition:opacity .18s ease, transform .18s ease;}
+  #toast .toast.show{opacity:1; transform:scale(1);}
+  #toast .toast .tk{width:26px; height:26px; border-radius:50%; background:var(--primary); color:#fff; display:flex; align-items:center; justify-content:center; flex:none;}
+  #toast .toast .tk svg{width:15px; height:15px;}
   .calcbtn{width:52px; flex:none; border:1px solid var(--border); border-radius:12px; background:#fff; font-size:20px;}
   .fpgroup{border-top:1px solid var(--border); margin-top:10px; padding-top:10px;}
   .stackbar{display:flex; height:30px; border-radius:8px; overflow:hidden; margin-bottom:10px; background:var(--bg);}
@@ -123,6 +128,7 @@
 <div id="app"></div>
 <nav id="nav"></nav>
 <div id="modal"></div>
+<div id="toast"></div>
 
 <script>
 "use strict";
@@ -499,6 +505,19 @@ function viewSettings(){ const y=new Date().getFullYear(); let h='<h2>設定・�
   return h;
 }
 
+/* ---------- 完了トースト（画面中央・チェック＋一言） ---------- */
+let _toastTimer=null, _toastHide=null;
+window.showToast=function(msg){
+  const box=document.getElementById("toast"); if(!box)return;
+  if(_toastTimer)clearTimeout(_toastTimer); if(_toastHide)clearTimeout(_toastHide);
+  const check='<span class="tk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
+  box.innerHTML='<div class="toast">'+check+'<span>'+esc(msg||"完了しました")+'</span></div>';
+  const el=box.firstChild;
+  requestAnimationFrame(function(){ if(el)el.classList.add("show"); });
+  _toastHide=setTimeout(function(){ if(el)el.classList.remove("show"); },1600);
+  _toastTimer=setTimeout(function(){ box.innerHTML=""; },1850);
+};
+
 /* ---------- ポップアップ（確認・数値入力・電卓） ---------- */
 window.closeModal=function(){ document.getElementById("modal").innerHTML=""; };
 function showConfirm(msg,onOk){ const m=document.getElementById("modal");
@@ -546,7 +565,7 @@ function render(){ const _sy=window.scrollY||window.pageYOffset||0; let v="";
 /* ---------- 操作 ---------- */
 window.setTab=function(t){ clearEdits(); ui.methodDetailId=null; ui.tab=t; render(); };
 window.switchLedger=function(id){ data.currentLedgerId=id; save(); render(); };
-window.setTxType=function(t){ ui.txType=t; render(); };
+window.setTxType=function(t){ if(!ui.editTxId){ const de=document.getElementById("f_date"); if(de&&de.value) ui.prefillDate=de.value; } ui.txType=t; render(); };
 window.pickCat=function(el){ for(const c of el.parentNode.children)c.classList.remove("on"); el.classList.add("on"); };
 window.changeMonth=function(dl){ const d=new Date(ui.month.y,ui.month.m+dl,1); ui.month={y:d.getFullYear(),m:d.getMonth()}; ui.selectedDate=null; ui.methodDetailId=null; render(); };
 window.setCalView=function(v){ ui.calView=v; render(); };
@@ -570,11 +589,11 @@ window.saveTx=function(){ const amount=intval("f_amount"), date=val("f_date");
   const mEl=document.querySelector("#f_methods .chip.on"); const methodId=mEl?parseInt(mEl.getAttribute("data-mid"),10):null;
   if(ui.txType==="expense"&&methodId) ui.lastMethodId=methodId;
   const rec={ledgerId:data.currentLedgerId,type:ui.txType,category:c?c.textContent:null,amount,date,payee:val("f_payee"),memo:val("f_memo"),medical:chk("f_medical"),transport:chk("f_transport"),person:(chk("f_medical")||chk("f_transport"))?val("f_person"):null,reimbursed:intval("f_reimb"),methodId:(ui.txType==="expense"?methodId:null)};
-  if(ui.editTxId){ const t=data.transactions.find(x=>x.id===ui.editTxId); if(t)Object.assign(t,rec); clearEdits(); save(); ui.flash="✓ 更新しました"; render(); }
-  else { rec.id=nextId(); data.transactions.push(rec); save(); ui.flash="✓ 保存しました（続けて入力できます／ホーム・グラフで確認）"; render(); } };
+  if(ui.editTxId){ const t=data.transactions.find(x=>x.id===ui.editTxId); if(t)Object.assign(t,rec); clearEdits(); save(); render(); showToast("更新しました"); }
+  else { rec.id=nextId(); data.transactions.push(rec); save(); ui.flash="続けて入力できます／ホーム・グラフで確認"; render(); showToast("保存しました"); } };
 window.editTx=function(id){ const t=data.transactions.find(x=>x.id===id); if(!t)return; clearEdits(); ui.editTxId=id; ui.editTx=Object.assign({},t); ui.txType=t.type; ui.tab="input"; render(); };
 window.cancelEditTx=function(){ clearEdits(); render(); };
-window.deleteTx=function(id){ showConfirm("この記録を削除しますか？",function(){ data.transactions=data.transactions.filter(t=>t.id!==id); if(ui.editTxId===id)clearEdits(); save(); render(); }); };
+window.deleteTx=function(id){ showConfirm("この記録を削除しますか？",function(){ data.transactions=data.transactions.filter(t=>t.id!==id); if(ui.editTxId===id)clearEdits(); save(); render(); showToast("削除しました"); }); };
 window.saveInv=function(){ const acc=document.getElementById("i_account").value; const styleEl=document.getElementById("i_style"); const style=(ui.invAction==="buy"&&styleEl)?styleEl.value:undefined;
   let rec;
   if(ui.invKind==="stock"){ const name=val("i_name"),symbol=val("i_symbol"); if(!name&&!symbol){alert("銘柄名または銘柄コードを入力してください");return;}
@@ -583,45 +602,47 @@ window.saveInv=function(){ const acc=document.getElementById("i_account").value;
     if(ui.invAction==="sell")rec.realizedPL=estRealized();
   } else { const name=val("i_name"); if(!name){alert("ファンド名を入力してください");return;} const amount=invAmount(); if(!amount){alert("金額を入力してください");return;}
     rec={ledgerId:data.currentLedgerId,kind:"fund",action:ui.invAction,symbol:"",name,quantity:0,price:0,fee:0,amount,account:acc,style:style,tradedAt:val("i_at"),memo:val("i_memo")}; }
-  if(ui.editInvId){ const t=data.investments.find(x=>x.id===ui.editInvId); if(t)Object.assign(t,rec); clearEdits(); save(); ui.flash="✓ 更新しました"; render(); }
-  else { rec.id=nextId(); data.investments.push(rec); save(); render(); } };
+  if(ui.editInvId){ const t=data.investments.find(x=>x.id===ui.editInvId); if(t)Object.assign(t,rec); clearEdits(); save(); render(); showToast("更新しました"); }
+  else { rec.id=nextId(); data.investments.push(rec); save(); render(); showToast("記録しました"); } };
 window.editInv=function(id){ const r=data.investments.find(x=>x.id===id); if(!r)return; clearEdits(); ui.editInvId=id; ui.editInv=Object.assign({},r); ui.invKind=r.kind; ui.invAction=r.action; render(); };
 window.cancelEditInv=function(){ clearEdits(); render(); };
-window.deleteInv=function(id){ showConfirm("この取引を削除しますか？",function(){ data.investments=data.investments.filter(i=>i.id!==id); if(ui.editInvId===id)clearEdits(); save(); render(); }); };
-window.addLedger=function(){ const n=val("l_name"); if(!n){alert("帳簿名を入力してください");return;} const colors=["#8A6BB1","#C0563F","#E8A33D","#2E6FB4","#2E7D6B"]; data.ledgers.push({id:nextId(),name:n,kind:"other",color:colors[data.ledgers.length%colors.length],shared:chk("l_shared")}); save(); render(); };
+window.deleteInv=function(id){ showConfirm("この取引を削除しますか？",function(){ data.investments=data.investments.filter(i=>i.id!==id); if(ui.editInvId===id)clearEdits(); save(); render(); showToast("削除しました"); }); };
+window.addLedger=function(){ const n=val("l_name"); if(!n){alert("帳簿名を入力してください");return;} const colors=["#8A6BB1","#C0563F","#E8A33D","#2E6FB4","#2E7D6B"]; data.ledgers.push({id:nextId(),name:n,kind:"other",color:colors[data.ledgers.length%colors.length],shared:chk("l_shared")}); save(); render(); showToast("帳簿を追加しました"); };
 window.toggleShare=function(id){ const l=data.ledgers.find(x=>x.id===id); l.shared=!l.shared; save(); render(); };
 window.toggleTab=function(key){ data.prefs.tabs[key]=!data.prefs.tabs[key]; if(!data.prefs.tabs[key]&&ui.tab===key) ui.tab="settings"; save(); render(); };
-window.addPayer=function(){ const n=val("payer_name"); if(!n){alert("負担先の名前を入力してください");return;} data.payers.push({id:nextId(),name:n}); save(); render(); };
-window.editPayer=function(id){ const p=data.payers.find(x=>x.id===id); if(!p)return; showTextPrompt("負担先の名前",p.name,function(v){ if(v){ p.name=v; save(); render(); } }); };
-window.deletePayer=function(id){ showConfirm("この負担先を削除しますか？（この負担先を使っている支払い方法は「未設定」になります）",function(){ data.payers=data.payers.filter(p=>p.id!==id); data.methods.forEach(m=>{ if(m.payerId===id)m.payerId=null; }); save(); render(); }); };
+window.addPayer=function(){ const n=val("payer_name"); if(!n){alert("負担先の名前を入力してください");return;} data.payers.push({id:nextId(),name:n}); save(); render(); showToast("追加しました"); };
+window.editPayer=function(id){ const p=data.payers.find(x=>x.id===id); if(!p)return; showTextPrompt("負担先の名前",p.name,function(v){ if(v){ p.name=v; save(); render(); showToast("変更しました"); } }); };
+window.deletePayer=function(id){ showConfirm("この負担先を削除しますか？（この負担先を使っている支払い方法は「未設定」になります）",function(){ data.payers=data.payers.filter(p=>p.id!==id); data.methods.forEach(m=>{ if(m.payerId===id)m.payerId=null; }); save(); render(); showToast("削除しました"); }); };
 window.saveMethod=function(){ const type=document.getElementById("m_type").value; let name=val("m_name");
   if(!name){ if(type==="cash")name="現金"; else if(type==="bank")name="口座引落"; else { alert("カードの名前を入力してください"); return; } }
   const payerId=parseInt(document.getElementById("m_payer").value,10)||null;
-  if(ui.editMethodId){ const m=data.methods.find(x=>x.id===ui.editMethodId); if(m)Object.assign(m,{name,type,payerId}); clearEdits(); }
+  let _upd=false;
+  if(ui.editMethodId){ const m=data.methods.find(x=>x.id===ui.editMethodId); if(m)Object.assign(m,{name,type,payerId}); clearEdits(); _upd=true; }
   else { data.methods.push({id:nextId(),name,type,payerId}); }
-  save(); render(); };
+  save(); render(); showToast(_upd?"更新しました":"追加しました"); };
 window.editMethod=function(id){ const m=data.methods.find(x=>x.id===id); if(!m)return; clearEdits(); ui.editMethodId=id; ui.editMethod=Object.assign({},m); render(); };
 window.cancelEditMethod=function(){ clearEdits(); render(); };
-window.deleteMethod=function(id){ showConfirm("この支払い方法を削除しますか？（記録は残り、支払い方法だけ「未設定」になります）",function(){ data.methods=data.methods.filter(m=>m.id!==id); if(ui.lastMethodId===id)ui.lastMethodId=null; save(); render(); }); };
+window.deleteMethod=function(id){ showConfirm("この支払い方法を削除しますか？（記録は残り、支払い方法だけ「未設定」になります）",function(){ data.methods=data.methods.filter(m=>m.id!==id); if(ui.lastMethodId===id)ui.lastMethodId=null; save(); render(); showToast("削除しました"); }); };
 window.showMethodDetail=function(id){ ui.methodDetailId=(ui.methodDetailId===id?null:id); render(); };
-window.deleteLedger=function(id){ if(data.ledgers.length<=1){alert("最後の帳簿は削除できません");return;} showConfirm("この帳簿の記録もすべて削除されます。よろしいですか？",function(){ data.ledgers=data.ledgers.filter(l=>l.id!==id); data.transactions=data.transactions.filter(t=>t.ledgerId!==id); data.investments=data.investments.filter(i=>i.ledgerId!==id); data.goals=data.goals.filter(g=>g.ledgerId!==id); if(data.currentLedgerId===id)data.currentLedgerId=data.ledgers[0].id; save(); render(); }); };
-window.addCategory=function(kind){ const v=val(kind==="expense"?"c_exp":"c_inc"); if(!v)return; if(!data.categories[kind].includes(v))data.categories[kind].push(v); save(); render(); };
-window.deleteCategory=function(kind,idx){ data.categories[kind].splice(idx,1); save(); render(); };
+window.deleteLedger=function(id){ if(data.ledgers.length<=1){alert("最後の帳簿は削除できません");return;} showConfirm("この帳簿の記録もすべて削除されます。よろしいですか？",function(){ data.ledgers=data.ledgers.filter(l=>l.id!==id); data.transactions=data.transactions.filter(t=>t.ledgerId!==id); data.investments=data.investments.filter(i=>i.ledgerId!==id); data.goals=data.goals.filter(g=>g.ledgerId!==id); if(data.currentLedgerId===id)data.currentLedgerId=data.ledgers[0].id; save(); render(); showToast("削除しました"); }); };
+window.addCategory=function(kind){ const v=val(kind==="expense"?"c_exp":"c_inc"); if(!v)return; if(!data.categories[kind].includes(v))data.categories[kind].push(v); save(); render(); showToast("追加しました"); };
+window.deleteCategory=function(kind,idx){ data.categories[kind].splice(idx,1); save(); render(); showToast("削除しました"); };
 window.addGoal=function(){ const name=val("g_name"),target=intval("g_target"); if(!name){alert("目標名を入力してください");return;} if(!target||target<=0){alert("目標額を入力してください");return;}
   const fields={type:ui.goalType,name,target,current:intval("g_current"),deadline:val("g_deadline")||null};
-  if(ui.editGoalId){ const g=data.goals.find(x=>x.id===ui.editGoalId); if(g)Object.assign(g,fields); clearEdits(); }
+  let _gupd=false;
+  if(ui.editGoalId){ const g=data.goals.find(x=>x.id===ui.editGoalId); if(g)Object.assign(g,fields); clearEdits(); _gupd=true; }
   else { data.goals.push(Object.assign({id:nextId(),ledgerId:data.currentLedgerId},fields)); }
-  save(); render(); };
+  save(); render(); showToast(_gupd?"更新しました":"追加しました"); };
 window.editGoal=function(id){ const g=data.goals.find(x=>x.id===id); if(!g)return; clearEdits(); ui.editGoalId=id; ui.editGoal=Object.assign({},g); ui.goalType=g.type||"want"; ui.tab="goals"; render(); };
 window.cancelEditGoal=function(){ clearEdits(); render(); };
-window.addToGoal=function(id){ const g=data.goals.find(x=>x.id===id); showPrompt("追加する金額（円）","",function(n){ if(n!=null){ g.current=Math.max(0,g.current+n); save(); render(); } }); };
-window.setGoal=function(id){ const g=data.goals.find(x=>x.id===id); showPrompt("現在の貯まった額（円）",g.current,function(n){ if(n!=null){ g.current=Math.max(0,n); save(); render(); } }); };
-window.deleteGoal=function(id){ showConfirm("目標を削除しますか？",function(){ data.goals=data.goals.filter(g=>g.id!==id); save(); render(); }); };
+window.addToGoal=function(id){ const g=data.goals.find(x=>x.id===id); showPrompt("追加する金額（円）","",function(n){ if(n!=null){ g.current=Math.max(0,g.current+n); save(); render(); showToast("追加しました"); } }); };
+window.setGoal=function(id){ const g=data.goals.find(x=>x.id===id); showPrompt("現在の貯まった額（円）",g.current,function(n){ if(n!=null){ g.current=Math.max(0,n); save(); render(); showToast("更新しました"); } }); };
+window.deleteGoal=function(id){ showConfirm("目標を削除しますか？",function(){ data.goals=data.goals.filter(g=>g.id!==id); save(); render(); showToast("削除しました"); }); };
 window.setGoalType=function(t){ ui.goalType=t; render(); };
-window.updateFire=function(){ const ps=planSet(); ps.fireExpense=intval("p_fexp"); save(); render(); };
-window.updateStarting=function(){ const ps=planSet(); ps.startingAssets=intval("p_start"); ps.monthly=intval("p_mon"); ps.ret=parseFloat(val("p_ret"))||0; ps.years=parseInt(val("p_yrs"),10)||1; save(); render(); };
+window.updateFire=function(){ const ps=planSet(); ps.fireExpense=intval("p_fexp"); save(); render(); showToast("更新しました"); };
+window.updateStarting=function(){ const ps=planSet(); ps.startingAssets=intval("p_start"); ps.monthly=intval("p_mon"); ps.ret=parseFloat(val("p_ret"))||0; ps.years=parseInt(val("p_yrs"),10)||1; save(); render(); showToast("更新しました"); };
 window.exportMedicalCsv=exportMedicalCsv;
-window.resetAll=function(){ showConfirm("すべての記録を消して、まっさらな初期状態に戻します。よろしいですか？（元に戻せません）",function(){ data=defaultData(); save(); ui.tab="home"; ui.selectedDate=null; render(); }); };
+window.resetAll=function(){ showConfirm("すべての記録を消して、まっさらな初期状態に戻します。よろしいですか？（元に戻せません）",function(){ data=defaultData(); save(); ui.tab="home"; ui.selectedDate=null; render(); showToast("初期化しました"); }); };
 window.exportWithData=function(){ try{
   const seed='<scr'+'ipt>window.__SEED__='+JSON.stringify(data).replace(/</g,"\\u003c")+';</scr'+'ipt>';
   let html='<!DOCTYPE html>\n'+document.documentElement.outerHTML;
@@ -652,4 +673,3 @@ render();
 </script>
 </body>
 </html>
-
