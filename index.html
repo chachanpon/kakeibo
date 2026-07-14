@@ -1357,10 +1357,12 @@ function handleQuickAdd(){
   /* URLを消す（この時点で戻る/リロードしても二重記録しない） */
   try{ history.replaceState(null,"",location.pathname); }catch(e){}
   if(!amount || isNaN(amount) || amount<=0){ ui.flash="金額が読み取れませんでした（自動記録なし）"; return; }
-  /* カテゴリをアプリの登録カテゴリに寄せる（完全一致→部分一致→その他） */
+  /* カテゴリをアプリの登録カテゴリに寄せる（空白を除いて 完全一致→部分一致→その他） */
   var cats=(type==="income"?data.categories.income:data.categories.expense);
+  function nsp(s){ return String(s==null?"":s).replace(/[\s　]/g,""); } /* 半角/全角スペース・改行を除去 */
+  var catN=nsp(cat);
   var category=null;
-  if(cat){ if(cats.indexOf(cat)>=0) category=cat; else { var hit=cats.find(function(c){return cat.indexOf(c)>=0||c.indexOf(cat)>=0;}); category=hit||null; } }
+  if(catN){ /* 空白除去で完全一致 */ var exact=cats.find(function(c){return nsp(c)===catN;}); if(exact){ category=exact; } else { /* 部分一致（どちらかがどちらかを含む） */ var hit=cats.find(function(c){var cn=nsp(c);return cn&&(catN.indexOf(cn)>=0||cn.indexOf(catN)>=0);}); category=hit||null; } }
   if(!category) category="その他";
   var rec={ledgerId:data.currentLedgerId,type:type,category:category,amount:amount,date:d,payee:payee,memo:memo,medical:false,transport:false,person:null,reimbursed:0,methodId:null,advance:false,imported:true};
   rec.id=nextId(); data.transactions.push(rec); save();
